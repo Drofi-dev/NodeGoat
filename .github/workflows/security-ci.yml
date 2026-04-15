@@ -1,0 +1,63 @@
+name: Security CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 14
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: sbom.json
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: json
+          output: trivy-results.json
+
+      - name: Run Semgrep
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: >-
+            p/javascript
+            p/nodejsscan
+            p/security-audit
+
+      - name: Enforce vulnerability policy
+        run: |
+          CRITICAL=$(grep -o '"Severity":"CRITICAL"' trivy-results.json | wc -l || true)
+          HIGHCVSS=$(grep -E '"V3Score":[9-9]\.[0-9]|"V3Score":[1-9][0-9]\.[0-9]' trivy-results.json | wc -l || true)
+          echo "Critical vulnerabilities: $CRITICAL"
+          echo "CVSS >= 9.0 vulnerabilities: $HIGHCVSS"
+          if [ "$CRITICAL" -gt 0 ] || [ "$HIGHCVSS" -gt 0 ]; then
+            echo "Security policy violated"
+            exit 1
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports
+          path: |
+            sbom.json
+            trivy-results.json
